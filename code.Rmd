@@ -1,0 +1,715 @@
+---
+title: "Code"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Shanxi county level plot
+
+```{r shanxicounty}
+pacman::p_load(data.table, tidyverse, maptools, pinyin, sf)
+sx = sf::st_read("data/shp/sx_border.shp")
+
+ggplot() + 
+  geom_sf(data = sx, size = 0.05, color = "#404040", fill = "white") + 
+  ggtitle("Shanxi county level Plot") + 
+  coord_sf(crs = "+proj=aeqd +lat_0=37 +lon_0=104") + theme_bw()
+# coord_sf(datum=NA)
+```
+
+**Data preprocessing**
+
+```{r pressure, echo=FALSE}
+# load("data/I_1317.Rdata")
+# CVDsx = I_1317 %>%
+#   select(p900, p22) %>%
+#   mutate(year = substr(p22, 1, 4) %>% as.numeric(),
+#          month = substr(p22, 5, 6) %>% as.numeric(),
+#          p22 = lubridate::ymd(substr(p22, 1, 10))) %>%
+#   set_names("hospid", "ad_date", "year") %>%
+#   select(hospid, year, ad_date) %>%
+#   filter(year >= 2015)
+# write_csv(CVDsx, "data/CVDsx.csv")
+wiki = read_csv("data/wiki_pinyin.csv", 
+                col_types = list(col_character(), 
+                                 col_character(), 
+                                 col_character()))
+CVDsx = fread("data/CVDsx.csv")
+patnum = CVDsx[,.N, c("hospid")]
+
+# merge district and hospital
+pat = readr::read_csv("data/xingzheng.csv", col_types = cols(),
+                      locale = locale(encoding = 'GB18030')) %>%
+  select("组织机构代码", "行政区划代码", "机构名称") %>% 
+  set_names("org_id", "district", "hosp_name") %>% 
+  right_join(patnum, by = c("org_id" = "hospid")) %>% 
+  mutate(district = ifelse(org_id == "40709028x", "140902", district),
+         district = ifelse(org_id == "405104545", "140107", district),
+         district = ifelse(org_id == "40627021", "140402", district),
+         district = ifelse(org_id == "40821001X", "141033", district),
+         district = ifelse(org_id == "678178558", "140109", district),
+         district = ifelse(org_id == "406272225", "140411", district),
+         district = ifelse(org_id == "713626580", "140221", district),
+         district = ifelse(org_id == "110765039", "140411", district),
+         district = ifelse(org_id == "405700216", "140411", district),
+         district = ifelse(org_id == "406270211", "140411", district),
+         district = ifelse(org_id == "406271169", "140411", district),
+         district = ifelse(org_id == "406271556", "140411", district),
+         district = ifelse(org_id == "406340195", "140411", district),
+         district = ifelse(org_id == "406380154", "140413", district),
+         district = ifelse(org_id == "406400290", "140412", district),
+         district = ifelse(org_id == "406440225", "140414", district),
+         district = ifelse(org_id == "407050077", "140211", district),
+         district = ifelse(org_id == "407070019", "140681", district)) %>% 
+  filter(!is.na(district)) %>% 
+  left_join(wiki, by = c("district" = "adcode"))
+# pat %>% select(org_id, district, city, county) %>% 
+#   write_csv("data/hosp_district.csv")
+
+distpat = pat %>% 
+  group_by(district, city, county) %>% 
+  summarise(Npat = sum(N)) %>% 
+  mutate(dist_old = district)
+
+distpat$dist_old[distpat$district == "140412"] = "140481"#luchengqu
+distpat$dist_old[distpat$district == "140413"] = "140421"#Shangdang District (new) = changzhi xian (old)
+distpat$dist_old[distpat$district == "140414"] = "140424"#luchengqu
+distpat$dist_old[distpat$district == "140681"] = "140624"#luchengqu
+```
+
+
+
+**The location of Shanxi Province in China**
+
+```{r}
+#Sys.setlocale(category ="LC_ALL", locale ="zh_cn.utf-8")
+library("scales")
+
+load("data/hloca.Rdata")
+names(hloca)[names(hloca) == "longtitude"] = "longitude"
+
+# hloca1 = hloca %>% 
+#   select(org_id, longitude, latitude, N) %>% 
+#   sf::st_as_sf(coords = c("longitude", "latitude"),
+#                crs = "+proj=aeqd +lat_0=37 +lon_0=104")
+
+ggplot() + 
+  geom_sf(data = sx, fill = "white", color = "grey") + 
+  geom_point(data = hloca, aes(x=longitude, y=latitude, size=N), 
+             shape=21, colour = "blue", fill="blue", alpha = 0.5) +
+  scale_size_continuous(labels = comma, range = c(1, 10),
+                        name = "The number\nof patients")+
+  theme_bw() + theme(axis.title.x=element_blank(), 
+                     axis.title.y=element_blank())
+
+ggsave("figs/hospitals.pdf", height=7, width=6)
+```
+
+**patient choropleth map**
+
+```{r}
+# Sys.setlocale(category ="LC_ALL", locale ="zh_cn.utf-8")
+sx1 = sf::st_read("data/shp/sx_border.shp") %>% 
+  left_join(distpat, by = c("ADMINCODE" = "dist_old")) %>% 
+  mutate(city = tolower(city), county = tolower(county)) %>% 
+  mutate(pat_cat = NA,
+         pat_cat = ifelse(Npat < 2150, "<2150", pat_cat),
+         pat_cat = ifelse(Npat >= 2150 & Npat < 4400, "2150-4400", pat_cat),
+         pat_cat = ifelse(Npat >= 4400 & Npat < 7700, "4400-7700", pat_cat),
+         pat_cat = ifelse(Npat >= 7700 & Npat < 13000, "7700-13000", pat_cat),
+         pat_cat = ifelse(Npat >= 13000, ">13000", pat_cat)) %>% 
+  mutate(pat_cat = factor(pat_cat, levels = 
+                            c(">13000", "7700-13000", "4400-7700", "2150-4400", "<2150")))
+
+ggplot() + 
+  geom_sf(data = sx1, size = 0.1, 
+          color = "grey", aes(fill = pat_cat)) + # #404040
+  scale_fill_brewer(palette="Reds", direction = -1)+
+  coord_sf(crs = "+proj=aeqd +lat_0=37 +lon_0=104") + 
+  labs(fill = "The number of \nCVD patients") + 
+  theme_bw() # + geom_sf_text(data = sx1, aes(label = PYNAME), colour = "blue")
+  
+ggsave("figs/choropleth_patients.pdf", height=7, width=6)
+```
+
+
+
+
+
+
+
+# Deal with weather data
+
+```{r}
+CVDsx = fread("data/CVDsx.csv")
+hosp_dist = fread("data/hosp_district.csv") %>% 
+  set_names(c("hospid", "district", "city", "county"))
+
+res_date = c(201501:201512, 201601:201612, 201701:201712) %>% as.character()
+zdist = CVDsx[, .N, c("hospid", "yearmonth")][
+  hosp_dist, on="hospid"][
+    ,.(N = sum(N)), 
+    by = c("district", "city", "county", "yearmonth")][
+      ,yearmonth := factor(yearmonth, levels = res_date)]
+zcity = CVDsx[, .N, c("hospid", "yearmonth")][
+  hosp_dist, on="hospid"][
+    ,.(N = sum(N)), by = c("city", "yearmonth")][
+      ,yearmonth := factor(yearmonth, levels = res_date)]
+
+
+pday = CVDsx[,yearmonth := factor(
+  yearmonth, levels = res_date)][,.N, "yearmonth"]
+
+pday %>% 
+  ggplot(aes(yearmonth, N)) + 
+  geom_bar(stat = "identity", fill = "#1e32cc") + theme_bw()+ 
+  scale_y_continuous(name="The number of CVD inpatients", labels = scales::comma)+
+  xlab("Year and month")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("figs/Npat_by_month.pdf", width = 10, height = 6.18)
+```
+
+
+**Maximum and minimum temperature by month in 119 ADs**
+
+```{r}
+require('pinyin')
+mypy = pydic(method = 'toneless', dic = 'pinyin2')
+load("data/weather.Rdata")
+res_date = c(201501:201512, 201601:201612, 201701:201712) %>% 
+  as.character()
+
+w = weather %>% 
+  select(1,2, mdate = ymd, max_tem = bWendu, 
+         min_tem = yWendu, aqi, aqiLevel) %>% 
+  mutate(myear = as.integer(substr(mdate, 1, 4))) %>% 
+  filter(myear >= 2015) %>% 
+  mutate(mdate = lubridate::ymd(mdate),
+         max_tem = gsub("([0-9]+).*$", "\\1",max_tem) %>% as.numeric,
+         min_tem = gsub("([0-9]+).*$", "\\1",min_tem) %>% as.numeric, 
+         yearmonth = factor(paste0(substr(mdate, 1, 4), 
+                                   substr(mdate, 6, 7))),
+         city = py(city,  dic = mypy, sep = ''),
+         county = py(county,  dic = mypy, sep = ''),
+         tem_diff = max_tem - min_tem,
+         tem_mean = (max_tem + min_tem)/2) %>% 
+  mutate(city = gsub('[[:digit:]]+', '', city), 
+         county = gsub('[[:digit:]]+', '', county)) %>% 
+  arrange(city, county, mdate)
+
+w1 = w %>% 
+  mutate(county = gsub("changzhi", "shangdang", county),
+         county = gsub("changzi", "zhangzi", county),
+         county = gsub("datong", "pingcheng", county),
+         county = gsub("datongxian", "yungang", county),
+         county = gsub("jincheng", "chengqu", county),
+         county = gsub("hongdong", "hongtong", county),
+         county = gsub("yaodou", "yaodu", county),
+         county = gsub("jiancaopingqu", "jiancaoping", county),
+         county = gsub("xiaodianqu", "xiaodian", county),
+         county = gsub("fanzhi", "fanshi", county),
+         county = gsub("jingyue", "jingle", county),
+         county = gsub("wutaishan", "wutai", county),
+         county = gsub("yangquan", "chengqu", county))
+w1_re = w %>% 
+  filter(county %in% c("changzhi", "datong", "jiaoqu")) %>% 
+  mutate(county = gsub("changzhi", "luzhou", county),
+         county = gsub("datong", "yungang", county),
+         county = gsub("jiaoqu", "kuangqu", county))
+
+w1 = w1 %>% 
+  rbind(w1_re)
+
+
+c2f = function(x) return((x*9/5) + 32)
+
+w1 %>% 
+  group_by(county, yearmonth) %>% 
+  summarise(min_tem = mean(min_tem),
+            max_tem = mean(max_tem)) %>% 
+  ungroup() %>% 
+  mutate(max_tem = c2f(max_tem), 
+         min_tem = c2f(min_tem)) %>% 
+  ggplot() + 
+  geom_line(aes(yearmonth, max_tem, group = county, 
+            color = "max"), alpha = 0.3) +
+  geom_line(aes(yearmonth, min_tem, group = county, 
+                color = "min"), alpha = 0.3) + 
+  scale_colour_manual(name="Line Color",
+    values = c(max = "red", min = "blue")) + 
+  theme_bw() + ylab("Temperature in Fahrenheits") + 
+  xlab("Year and month") + 
+  theme(legend.justification = c(1, 1), legend.position = c(0.9, 0.12),
+        legend.background = element_rect(fill=alpha('white', 0.4)),
+        legend.direction="horizontal", 
+        axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  guides(color=guide_legend(title="Temperature type", 
+                            override.aes = list(alpha = 1, size = 2)))
+ggsave("figs/temperature_in_groups.pdf", width = 10, height = 6.18)
+```
+
+**Two temperature variation**
+
+```{r}
+lagterm = 7
+aw = w %>% 
+  group_by(city, county) %>% 
+  mutate(lagtem_mean = lag(tem_mean, lagterm),
+         lagtem_diff = lag(tem_diff, lagterm)) %>% 
+  ungroup %>% 
+  group_by(city, county, yearmonth) %>% 
+  summarise(betweenVar = sd(lagtem_mean, na.rm = TRUE),
+            withinVar = mean(lagtem_diff, na.rm = TRUE)) %>% 
+  ungroup()
+
+aw %>% 
+  gather("var_type", "value", -city, -county, -yearmonth) %>% 
+  mutate(group0 = paste0(city, county, var_type)) %>% 
+  ggplot(aes(yearmonth, value, group = group0, color = var_type)) + 
+  geom_line(alpha = 0.2) + theme_bw() + 
+  xlab("Year and month")+ ylab("Temperature variation") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  theme(legend.justification = c(1, 1), legend.position = c(0.7, 0.99),
+        legend.background = element_rect(fill=alpha('white', 0.4)),
+        legend.direction="horizontal")+ 
+  guides(color=guide_legend(title="Type of variation",
+                            override.aes = list(alpha = 1, size = 2)))+
+  scale_color_manual(values = c("red", "blue"), 
+                     labels = c("Horizontal Variation", "Vertical Variation")) 
+
+ggsave("figs/two_tem_variation.pdf", width = 10, height = 6.18)
+```
+
+
+**match temperature and geometry data**
+
+```{r}
+sx_df = sx1 %>% 
+  st_set_geometry(NULL) %>% 
+  select(-NAME, -PYNAME, -KIND) %>% 
+  mutate(county = gsub("[[:space:]]county|[[:space:]]district|[[:space:]]city", 
+                       "", county)) %>% 
+  arrange(city, county)
+
+write_csv(sx_df, "data/shp_county_names.csv")
+
+w_df = w %>% 
+  group_by(city, county) %>% 
+  summarise(n = n()) #%>% write_csv("data/weather_county_names.csv")
+
+w1_df = w1 %>% 
+  group_by(city, county) %>% 
+  summarise(n = n())
+
+z = sx_df %>% 
+  left_join(w1_df, by = c("city", "county"))
+```
+
+
+
+**yearbook data**
+```{r}
+impute_mean <- function(x) {
+  replace(x, is.na(x), mean(x, na.rm = TRUE))
+}
+recol = function(dat){
+  d1 = dat %>% 
+    select(2:8) %>% 
+    rename("county" = 1) %>% 
+    mutate(city = county,
+           city = ifelse(!is.na(hukou), NA, city),
+           city = zoo::na.locf(city, FALSE)) %>% 
+    filter(!is.na(hukou)) %>% 
+    group_by(city) %>% 
+    mutate(Rural = impute_mean(Rural)) %>% 
+    ungroup() %>% 
+    mutate(pop = Rural + Urban)
+  
+  d2 = dat %>% 
+  select(10:11) %>% 
+  rename("county" = 1) %>% 
+    mutate(city = county,
+           city = ifelse(!is.na(gdp), NA, city),
+           city = zoo::na.locf(city, FALSE)) %>% 
+  filter(!is.na(gdp))
+  
+  d3 = d1 %>% 
+    left_join(d2) %>% 
+    mutate(city = tolower(city),
+           county = tolower(county)) %>% 
+    rename_all(tolower) %>% 
+    mutate(pop100t = pop,
+           p_female = female*100/(male + female),
+           p_rural = rural*100/(rural + urban),
+           gdp_cap = gdp/pop) %>% 
+    select(city, county, pop100t, p_female, p_rural, gdp_cap) %>% 
+    arrange(city, county)
+  
+  d3$county[d3$city == "changzhi" & d3$county == "changzhixian"] = "shangdang"
+  d3$county[d3$city == "changzhi" & d3$county == "chengqu"] = "luzhou"
+  d3$county[d3$city == "datong" & d3$county == "chengqu"] = "pingcheng"
+  d3$county[d3$city == "datong" & d3$county == "nanjiao"] = "yungang"
+    
+  return(d3)
+}
+
+
+yb15 = readxl::read_excel("data/Shanxi yearbook.xlsx", sheet = 2) %>% 
+  recol() %>% mutate(dyear = 2015)
+yb16 = readxl::read_excel("data/Shanxi yearbook.xlsx", sheet = 3) %>% 
+  recol() %>% mutate(dyear = 2016)
+yb17 = readxl::read_excel("data/Shanxi yearbook.xlsx", sheet = 4) %>% 
+  recol() %>% mutate(dyear = 2017)
+
+yb_com = rbind(yb15, yb16, yb17)
+```
+
+**Poisson regression by year**
+
+```{r}
+wiki = read_csv("data/wiki_pinyin.csv", 
+                col_types = list(col_character(), 
+                                 col_character(), 
+                                 col_character()))
+CVDsx = fread("data/CVDsx.csv")
+patnum = CVDsx[,.N, c("hospid", "dyear")]
+
+# merge district and hospital
+pat = readr::read_csv("data/xingzheng.csv", col_types = cols(),
+                      locale = locale(encoding = 'GB18030')) %>%
+  select("组织机构代码", "行政区划代码", "机构名称") %>% 
+  set_names("org_id", "district", "hosp_name") %>% 
+  right_join(patnum, by = c("org_id" = "hospid")) %>% 
+  mutate(district = ifelse(org_id == "40709028x", "140902", district),
+         district = ifelse(org_id == "405104545", "140107", district),
+         district = ifelse(org_id == "40627021", "140402", district),
+         district = ifelse(org_id == "40821001X", "141033", district),
+         district = ifelse(org_id == "678178558", "140109", district),
+         district = ifelse(org_id == "406272225", "140411", district),
+         district = ifelse(org_id == "713626580", "140221", district),
+         district = ifelse(org_id == "110765039", "140411", district),
+         district = ifelse(org_id == "405700216", "140411", district),
+         district = ifelse(org_id == "406270211", "140411", district),
+         district = ifelse(org_id == "406271169", "140411", district),
+         district = ifelse(org_id == "406271556", "140411", district),
+         district = ifelse(org_id == "406340195", "140411", district),
+         district = ifelse(org_id == "406380154", "140413", district),
+         district = ifelse(org_id == "406400290", "140412", district),
+         district = ifelse(org_id == "406440225", "140414", district),
+         district = ifelse(org_id == "407050077", "140211", district),
+         district = ifelse(org_id == "407070019", "140681", district)) %>% 
+  filter(!is.na(district)) %>% 
+  left_join(wiki, by = c("district" = "adcode"))
+# pat %>% select(org_id, district, city, county) %>% 
+#   write_csv("data/hosp_district.csv")
+
+distpat = pat %>% 
+  group_by(district, city, county, dyear) %>% 
+  summarise(Npat = sum(N)) %>% 
+  mutate(dist_old = district) 
+
+distpat$dist_old[distpat$district == "140412"] = "140481"#luchengqu
+distpat$dist_old[distpat$district == "140413"] = "140421"#Shangdang District (new) = changzhi xian (old)
+distpat$dist_old[distpat$district == "140414"] = "140424"#luchengqu
+distpat$dist_old[distpat$district == "140681"] = "140624"#luchengqu
+
+wyear = w1 %>% 
+  group_by(city, county, dyear = myear) %>% 
+  summarise(tmean = mean(tem_mean, na.rm = TRUE),
+            betVar = sd(tem_mean, na.rm = TRUE),
+            withinVar = mean(tem_diff))
+
+sx_poi = sf::st_read("data/shp/sx_border.shp") %>% 
+  left_join(distpat, by = c("ADMINCODE" = "dist_old")) %>% #CVD patient
+  mutate(city = tolower(city), county = tolower(county)) %>% 
+  st_set_geometry(NULL) %>% 
+  select(-NAME, -PYNAME, -KIND) %>% 
+  mutate(county = gsub("[[:space:]]county|[[:space:]]district|[[:space:]]city", 
+                       "", county)) %>% 
+  arrange(city, county) %>% 
+  left_join(yb_com, by = c("city", "county", "dyear")) %>% # statistical yearbook
+  left_join(wyear, by = c("city", "county", "dyear")) %>% 
+  mutate(citycounty = paste(city, county, sep = "_"))
+```
+
+```{r}
+fit1 = glm(Npat ~ betVar + withinVar + tmean + log(gdp_cap) + p_rural + p_female, 
+           offset = log(pop100t), data = sx_poi, family = poisson(link = "log"))
+summary(fit1)$coefficients
+```
+
+
+```{r}
+require(lme4)
+fit2 <- glmer(Npat ~ betVar + withinVar + tmean + log(gdp_cap) + p_rural + p_female + (1|citycounty), 
+           offset = log(pop100t), data = sx_poi, family = poisson(link = "log"),nAGQ=0)
+summary(fit2)$coefficients
+```
+
+
+
+
+
+
+## Poisson regression by year and month
+
+```{r}
+wiki = read_csv("data/wiki_pinyin.csv", 
+                col_types = list(col_character(), 
+                                 col_character(), 
+                                 col_character()))
+CVDsx = fread("data/CVDsx.csv")
+patnum = CVDsx[,.N, c("hospid", "yearmonth")]
+
+# merge district and hospital
+pat = readr::read_csv("data/xingzheng.csv", col_types = cols(),
+                      locale = locale(encoding = 'GB18030')) %>%
+  select("组织机构代码", "行政区划代码", "机构名称") %>% 
+  set_names("org_id", "district", "hosp_name") %>% 
+  right_join(patnum, by = c("org_id" = "hospid")) %>% 
+  mutate(district = ifelse(org_id == "40709028x", "140902", district),
+         district = ifelse(org_id == "405104545", "140107", district),
+         district = ifelse(org_id == "40627021", "140402", district),
+         district = ifelse(org_id == "40821001X", "141033", district),
+         district = ifelse(org_id == "678178558", "140109", district),
+         district = ifelse(org_id == "406272225", "140411", district),
+         district = ifelse(org_id == "713626580", "140221", district),
+         district = ifelse(org_id == "110765039", "140411", district),
+         district = ifelse(org_id == "405700216", "140411", district),
+         district = ifelse(org_id == "406270211", "140411", district),
+         district = ifelse(org_id == "406271169", "140411", district),
+         district = ifelse(org_id == "406271556", "140411", district),
+         district = ifelse(org_id == "406340195", "140411", district),
+         district = ifelse(org_id == "406380154", "140413", district),
+         district = ifelse(org_id == "406400290", "140412", district),
+         district = ifelse(org_id == "406440225", "140414", district),
+         district = ifelse(org_id == "407050077", "140211", district),
+         district = ifelse(org_id == "407070019", "140681", district)) %>% 
+  filter(!is.na(district)) %>% 
+  left_join(wiki, by = c("district" = "adcode"))
+# pat %>% select(org_id, district, city, county) %>% 
+#   write_csv("data/hosp_district.csv")
+
+distpat = pat %>% 
+  mutate(yearmonth = as.character(yearmonth)) %>% 
+  group_by(district, city, county, yearmonth) %>% 
+  summarise(Npat = sum(N)) %>% 
+  mutate(dist_old = district) 
+
+distpat$dist_old[distpat$district == "140412"] = "140481"#luchengqu
+distpat$dist_old[distpat$district == "140413"] = "140421"#Shangdang District (new) = changzhi xian (old)
+distpat$dist_old[distpat$district == "140414"] = "140424"#luchengqu
+distpat$dist_old[distpat$district == "140681"] = "140624"#luchengqu
+
+wyear = w1 %>% 
+  mutate(yearmonth = paste0(substr(mdate, 1, 4), 
+                            substr(mdate, 6, 7))) %>% 
+  group_by(city, county, yearmonth) %>% 
+  summarise(tmean = mean(tem_mean, na.rm = TRUE),
+            betVar = sd(tem_mean, na.rm = TRUE),
+            withinVar = mean(tem_diff))
+
+yb_com1 = yb_com %>% 
+  slice(rep(row_number(), 12)) %>% 
+  mutate(dmonth = rep(c(paste0(0, 1:9), 10:12), each = 357),
+         yearmonth = paste0(dyear, dmonth))
+
+sx_poi = sf::st_read("data/shp/sx_border.shp") %>% 
+  left_join(distpat, by = c("ADMINCODE" = "dist_old")) %>% #CVD patient
+  mutate(city = tolower(city), county = tolower(county)) %>% 
+  st_set_geometry(NULL) %>% 
+  select(-NAME, -PYNAME, -KIND) %>% 
+  mutate(county = gsub("[[:space:]]county|[[:space:]]district|[[:space:]]city", 
+                       "", county)) %>% 
+  arrange(city, county) %>% 
+  left_join(yb_com1, by = c("city", "county", "yearmonth")) %>% # statistical yearbook
+  left_join(wyear, by = c("city", "county", "yearmonth")) %>% 
+  mutate(citycounty = paste(city, county, sep = "_"))
+
+
+save(sx_poi, file = "data/sx_poi.Rdata")
+```
+
+
+```{r}
+sx_poisp = sf::st_read("data/shp/sx_border.shp") %>% 
+  left_join(distpat[distpat$yearmonth == "201703",], 
+            by = c("ADMINCODE" = "dist_old")) %>% #CVD patient
+  mutate(city = tolower(city), county = tolower(county)) %>% 
+  select(-NAME, -PYNAME, -KIND) %>% 
+  mutate(county = gsub("[[:space:]]county|[[:space:]]district|[[:space:]]city", 
+                       "", county)) %>% 
+  arrange(city, county) %>% 
+  left_join(yb_com1[yb_com1$yearmonth == "201703",], 
+            by = c("city", "county", "yearmonth")) %>% # statistical yearbook
+  left_join(wyear[wyear$yearmonth == "201703",], 
+            by = c("city", "county", "yearmonth")) %>% 
+  mutate(citycounty = paste(city, county, sep = "_"))
+
+st_write(sx_poisp, "geoda_data/sx_poisp.shp")
+```
+
+
+```{r}
+fit1 = glm(Npat ~ betVar + withinVar + tmean + log(gdp_cap) + p_rural + p_female, 
+           offset = log(pop100t), data = sx_poi, family = poisson(link = "log"))
+summary(fit1)$coefficients
+save(fit1, file = "fit/fit1.Rdata")
+```
+
+
+
+```{r}
+require(lme4)
+fit2 <- glmer(Npat ~ betVar + withinVar + tmean + log(gdp_cap) + p_rural + p_female + 
+                (1 + betVar + withinVar|citycounty), 
+           offset = log(pop100t), data = sx_poi, 
+           family = poisson(link = "log"),nAGQ=0)
+summary(fit2)$coefficients
+save(fit2, file = "fit/fit2.Rdata")
+```
+
+
+```{r}
+library("mgcv")
+library("mgcViz")
+load("data/sx_poi.Rdata")
+
+sx_poi_gam = sx_poi
+sx_poi_gam$citycounty = as.factor(sx_poi$citycounty)
+
+
+gam1 = gam(Npat ~ s(betVar, k = 3) + s(withinVar, k = 3) + tmean + log(gdp_cap) + 
+            p_rural + p_female, method="REML", 
+          offset = log(pop100t), 
+          family=poisson(link=log), data=sx_poi_gam)
+save(gam1, file = "fit/gam1.Rdata")
+
+gam1_bet = mgcViz::getViz(gam1)
+gg1_bet1 = plot(sm(gam1_bet, 1))
+gg1_bet2 = plot(sm(gam1_bet, 2))
+
+gg1_bet1 + 
+  theme_bw() + 
+  theme(text = element_text(size=20),
+        axis.text.x = element_text(size = 20)) +
+  xlab("Temperature Horizontal Variance")
+ggsave(filename = "figs/gam1_HV.pdf", height=6.18, width=10)
+
+
+gg1_bet2 + 
+  theme_bw() + 
+  theme(text = element_text(size=20),
+        axis.text.x = element_text(size = 20)) +
+  xlab("Temperature Vertical Variance")
+ggsave(filename = "figs/gam1_VV.pdf", height=6.18, width=10)
+
+
+gam2 = gam(Npat ~ s(citycounty, bs = "re") + 
+             s(betVar, k = 5) + 
+             s(withinVar, k = 3) + tmean + 
+            log(gdp_cap) + p_rural + p_female, method="REML",
+          offset = log(pop100t), family=poisson(link=log),
+          data=sx_poi_gam)
+plot(gam2)
+save(gam2, file = "fit/gam2.Rdata")
+
+gam2_bet = mgcViz::getViz(gam2)
+gg2_bet1 = plot(sm(gam2_bet, 1))
+gg2_bet2 = plot(sm(gam2_bet, 2))
+gg2_bet3 = plot(sm(gam2_bet, 3))
+gg2_bet2 + 
+  theme_bw() + xlab("Temperature Horizontal Variance")+ 
+  theme(text = element_text(size=20),
+        axis.text.x = element_text(size = 20))
+ggsave(filename = "figs/gam2_HV.pdf", height=6.18, width=10)
+gg2_bet3 + 
+  theme_bw() + xlab("Temperature Vertical Variance")+ 
+  theme(text = element_text(size=20),
+        axis.text.x = element_text(size = 20))
+ggsave(filename = "figs/gam2_VV.pdf", height=6.18, width=10)
+
+```
+
+```{r}
+require(lme4)
+fit3 <- glmer(Npat ~ betVar + withinVar + tmean + log(gdp_cap) + p_rural + p_female + 
+                (1 + betVar + withinVar|citycounty) + (1|city) + (1|dmonth) + (1|dyear), 
+           offset = log(pop100t), data = sx_poi, 
+           family = poisson(link = "log"),nAGQ=0,
+               control=glmerControl(optimizer="bobyqa",
+                                 optCtrl=list(maxfun=2e5)))
+
+round(summary(fit3)$coefficients, 3)
+
+round(exp(summary(fit3)$coefficients[,1]), 3)
+save(fit3, file = "fit/fit3.Rdata")
+```
+
+
+
+```{r}
+require(INLA)
+japinlala = inla(fpp, family = "poisson", data = sx_poi,
+                 control.compute = list(dic = TRUE),
+                 control.inla = list(tolerance = 1e-20, h = 1e-08),
+                 control.predictor = list(compute = TRUE))
+```
+
+
+
+
+
+
+
+```{r}
+distpatmoran = distpat %>% 
+  filter(yearmonth == "201703")
+
+
+sxmoran = sf::st_read("data/shp/sx_border.shp") %>% 
+  left_join(distpatmoran, by = c("ADMINCODE" = "dist_old")) %>% #CVD patient
+  mutate(city = tolower(city), county = tolower(county)) %>% 
+  select(-NAME, -PYNAME, -KIND) %>% 
+  mutate(county = gsub("[[:space:]]county|[[:space:]]district|[[:space:]]city", 
+                       "", county)) %>% 
+  arrange(city, county) %>% 
+  left_join(yb_com1, by = c("city", "county", "yearmonth")) %>% # statistical yearbook
+  left_join(wyear, by = c("city", "county", "yearmonth")) %>% 
+  mutate(citycounty = paste(city, county, sep = "_")) %>% 
+  filter(!is.na(Npat))
+
+library(spdep)
+neighborhoods_sp <- as(sxmoran, "Spatial") 
+nb_obj <- poly2nb(neighborhoods_sp)
+weights <- nb2listw(nb_obj, style = "W", zero.policy = TRUE)
+
+moran(neighborhoods_sp$Npat, weights, n=length(weights$neighbours), S0=Szero(weights))
+spdep::moran.mc(neighborhoods_sp$Npat, weights, nsim = 99)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
